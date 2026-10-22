@@ -233,8 +233,28 @@ class AnthropicStreamParserTest {
         assertThat(resp.getStopReason()).isEqualTo(StopReason.TOOL_USE);
     }
 
-    // ── AC-NN-5: multi-block interleaved state machine ─────────────────
+    @Test
+    @DisplayName("tool_use names are mapped back from the Anthropic wire alias")
+    void toolUseNameAliasIsResolvedToInternalName() {
+        AnthropicStreamParser parser = new AnthropicStreamParser();
+        parser.setToolNameAliases(
+            java.util.Collections.singletonMap("server_everything_echo", "server-everything:echo"));
+        CapturingSubscriber sink = new CapturingSubscriber();
 
+        parser.feed(buildContentBlockStartToolUse(0, "tu_1", "server_everything_echo"), sink);
+        parser.feed(buildInputJsonDelta(0, "{}"), null);
+        parser.feed(buildContentBlockStop(0), null);
+        parser.feed(buildMessageDelta("tool_use", 7), null);
+        parser.feed(buildMessageStop(), null);
+
+        AgentEvent.ToolStarted ts = (AgentEvent.ToolStarted) sink.events().get(0);
+        assertThat(ts.getName()).isEqualTo("server-everything:echo");
+
+        LlmResponse resp = parser.finish();
+        assertThat(resp.getToolCalls().get(0).getName()).isEqualTo("server-everything:echo");
+    }
+
+    // ── AC-NN-5: multi-block interleaved state machine ─────────────────
     @Test
     @DisplayName("AC-NN-5: multiBlockInterleavedStateMachine")
     void multiBlockInterleavedStateMachine() {

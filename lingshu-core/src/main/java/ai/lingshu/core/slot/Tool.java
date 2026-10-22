@@ -73,7 +73,13 @@ public interface Tool {
     @ContractVersionRef
     String CONTRACT_VERSION = "1.0.0";
 
-    /** Unique tool name; the LLM sees this in {@code ToolSpec.name}. */
+    /**
+     * Unique internal tool name (registry key, permission allow/deny matching,
+     * CLI {@code /xxx} commands). Names are intentionally unrestricted; the
+     * LLM-facing wire name is derived by
+     * {@link ai.lingshu.core.tool.ToolNameCodec#toWireName(String)} at the
+     * provider boundary.
+     */
     String name();
 
     /** Human-readable description; surfaced to the model so it can decide when to call. */

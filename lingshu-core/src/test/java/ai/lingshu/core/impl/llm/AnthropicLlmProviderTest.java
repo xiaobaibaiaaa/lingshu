@@ -25,6 +25,7 @@ import ai.lingshu.core.message.ToolCall;
 import ai.lingshu.core.message.ToolSpec;
 import ai.lingshu.core.runtime.AgentConfig;
 import ai.lingshu.core.runtime.TurnContext;
+import ai.lingshu.core.tool.ToolNameCodec;
 import ai.lingshu.core.impl.runtime.DefaultSession;
 import ai.lingshu.core.impl.runtime.DefaultTurnContext;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -280,6 +281,32 @@ class AnthropicLlmProviderTest {
         // messages[] also present
         assertThat(root.path("messages").isArray()).isTrue();
         assertThat(root.path("messages").size()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("tool names with ':' are sanitized to Anthropic's allowed pattern")
+    void buildRequestBody_sanitizesNamespacedToolNames() throws Exception {
+        ToolCall historicCall = new ToolCall("c1", "server-everything:echo",
+            MAPPER.createObjectNode());
+        Prompt p = Prompt.builder()
+            .messages(Arrays.asList(
+                new Message.User("echo hi"),
+                new Message.Assistant("calling tool", Arrays.asList(historicCall),
+                    StopReason.TOOL_USE,
+                    ai.lingshu.core.message.Usage.zero())))
+            .tools(Arrays.asList(new ToolSpec("server-everything:echo", "Echo",
+                MAPPER.createObjectNode())))
+            .build();
+
+        String body = (String) buildRequestBodyMethod().invoke(newProvider(), p);
+        JsonNode root = MAPPER.readTree(body);
+        String wireName = ToolNameCodec.toWireName("server-everything:echo");
+
+        assertThat(wireName).matches("^[a-zA-Z0-9_-]{1,64}$");
+        assertThat(wireName).startsWith("server-everything_echo_");
+        assertThat(root.path("tools").get(0).path("name").asText()).isEqualTo(wireName);
+        assertThat(root.path("messages").get(1).path("content").get(1).path("name").asText())
+            .isEqualTo(wireName);
     }
 
     // ── AC-NN-2: messages[].content as array of blocks ───────────────────

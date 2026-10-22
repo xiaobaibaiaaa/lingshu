@@ -63,8 +63,10 @@ import java.util.List;
  * normalizes {@code \\\\ → /} before walking the path so the parent-directory
  * extraction is cross-platform. Linux/macOS descriptions use forward slashes already,
  * so the replace is a no-op there. Without this normalization, the skill name
- * degenerates to the literal {@code "SKILL.md"} which violates the Anthropic tool-name
- * wire rule {@code ^[a-zA-Z0-9_-]+$}.
+ * degenerates to the literal {@code "SKILL.md"} instead of the intended directory
+ * name. The directory name does not need to satisfy any LLM naming rule —
+ * {@link ai.lingshu.core.tool.ToolNameCodec} derives the provider-facing wire name
+ * for every skill (and MCP/A2A/local tool) before the request is sent.
  */
 public class ClasspathSkillSource implements SkillSource {
 
@@ -149,8 +151,8 @@ public class ClasspathSkillSource implements SkillSource {
         // Normalize separators: on Windows, wildcard-matched resources are
         // FileSystemResource whose description uses backslashes
         // ("file [D:\...\skills\agent\SKILL.md]") — without this, lastIndexOf('/')
-        // misses and the skill name degenerates to the literal "SKILL.md",
-        // which then breaks the Anthropic tool-name wire rule (^[a-zA-Z0-9_-]+$).
+        // misses and the skill name degenerates to the literal "SKILL.md".
+        // Wire-name legality is handled centrally by ToolNameCodec.
         String desc = r.getDescription().replace('\\', '/');
         // Resource description for classpath:scan entries looks like
         // "URL [jar:file:.../skills/agent-builtin/commit/SKILL.md]" or

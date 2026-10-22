@@ -28,7 +28,11 @@ import lombok.Value;
  */
 @Value
 public class ToolSpec {
-    /** Tool name as seen by the LLM (must equal {@code Tool.name()}). */
+    /**
+     * Internal tool name (must equal {@code Tool.name()}). Providers translate
+     * it to their wire format with {@link ai.lingshu.core.tool.ToolNameCodec}
+     * rather than exposing it verbatim.
+     */
     String name;
     /** Human-readable description for the LLM to decide when to call. */
     String description;

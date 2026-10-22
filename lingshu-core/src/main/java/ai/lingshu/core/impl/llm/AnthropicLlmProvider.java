@@ -24,6 +24,7 @@ import ai.lingshu.core.message.ToolSpec;
 import ai.lingshu.core.message.Usage;
 import ai.lingshu.core.runtime.TurnContext;
 import ai.lingshu.core.slot.LlmProvider;
+import ai.lingshu.core.tool.ToolNameCodec;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -40,7 +41,9 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -164,18 +167,47 @@ public class AnthropicLlmProvider implements LlmProvider {
 
         String url = baseUrl + "/v1/messages";
         final String requestBody = buildRequestBody(ourPrompt);
+        final Map<String, String> toolNameAliases = buildToolNameAliases(ourPrompt);
 
         LOG.info("AnthropicLlmProvider calling {} model={} (stream=true)", url, model);
 
         return CompletableFuture.supplyAsync(() -> {
             long t0 = System.currentTimeMillis();
-            LlmResponse resp = doPostStream(url, requestBody, sink);
+            LlmResponse resp = doPostStream(url, requestBody, sink, toolNameAliases);
             long elapsed = System.currentTimeMillis() - t0;
             LOG.info("AnthropicLlmProvider.stream completed in {}ms (textLen={}, toolCalls={})",
                 elapsed, resp.getText() == null ? 0 : resp.getText().length(),
                 resp.getToolCalls() == null ? 0 : resp.getToolCalls().size());
             return resp;
         }, ioExecutor);
+    }
+
+    /**
+     * Build the wire-name → internal-name alias table for one request.
+     * Applied to streaming tool_use blocks so the rest of the engine
+     * (ToolRegistry lookup, tool_result pairing) keeps seeing the original
+     * names such as {@code "github:search_repos"}.
+     */
+    private static Map<String, String> buildToolNameAliases(ai.lingshu.core.message.Prompt prompt) {
+        Map<String, String> aliases = new HashMap<String, String>();
+        List<ToolSpec> tools = prompt.getTools();
+        if (tools != null) {
+            for (ToolSpec spec : tools) {
+                String wireName = ToolNameCodec.toWireName(spec.getName());
+                if (wireName != null) {
+                    String existing = aliases.get(wireName);
+                    if (existing != null && !existing.equals(spec.getName())) {
+                        throw new LingsLlmProviderException(
+                            LlmErrorCodes.LINGS_L01,
+                            "[LINGS-L01] tool name alias collision: '" + existing + "' and '"
+                                + spec.getName() + "' both map to wire name '" + wireName
+                                + "' — refusing to send an ambiguous tool list to Anthropic");
+                    }
+                    aliases.put(wireName, spec.getName());
+                }
+            }
+        }
+        return aliases;
     }
 
     // ── HTTP transport (HttpURLConnection — JDK 8 compatible) ────────────
@@ -272,9 +304,11 @@ public class AnthropicLlmProvider implements LlmProvider {
      * id / name) propagates unwrapped so callers can branch on
      * {@code getCode()} per the Story #027a convention.
      */
-    private LlmResponse doPostStream(String url, String body, Subscriber<? super AgentEvent> sink) {
+    private LlmResponse doPostStream(String url, String body, Subscriber<? super AgentEvent> sink,
+                                     Map<String, String> toolNameAliases) {
         HttpURLConnection conn = null;
         AnthropicStreamParser parser = new AnthropicStreamParser();
+        parser.setToolNameAliases(toolNameAliases);
         try {
             URL u = new URL(url);
             conn = (HttpURLConnection) u.openConnection();
@@ -401,7 +435,7 @@ public class AnthropicLlmProvider implements LlmProvider {
             if (tools != null) {
                 for (ToolSpec spec : tools) {
                     ObjectNode t = toolsArray.addObject();
-                    t.put("name", spec.getName());
+                    t.put("name", ToolNameCodec.toWireName(spec.getName()));
                     if (spec.getDescription() != null) {
                         t.put("description", spec.getDescription());
                     }
@@ -509,7 +543,7 @@ public class AnthropicLlmProvider implements LlmProvider {
                 ObjectNode toolUseBlock = content.addObject();
                 toolUseBlock.put("type", "tool_use");
                 toolUseBlock.put("id", call.getId());
-                toolUseBlock.put("name", call.getName());
+                toolUseBlock.put("name", ToolNameCodec.toWireName(call.getName()));
                 if (call.getInput() != null) {
                     toolUseBlock.set("input", call.getInput());
                 } else {

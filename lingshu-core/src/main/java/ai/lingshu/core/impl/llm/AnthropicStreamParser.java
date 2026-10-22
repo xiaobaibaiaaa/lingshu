@@ -125,6 +125,22 @@ public class AnthropicStreamParser {
     private final Map<Integer, ToolBlockBuffer> toolBlocks = new HashMap<Integer, ToolBlockBuffer>();
 
     /**
+     * Wire-name → internal-name aliases for tool_use blocks. Anthropic tool
+     * names must match {@code ^[a-zA-Z0-9_-]{1,64}$}; the provider derives them
+     * with {@link ai.lingshu.core.tool.ToolNameCodec} and this parser maps them
+     * back to the registered name (e.g. {@code "github:search_repos"}).
+     */
+    private Map<String, String> toolNameAliases = new HashMap<String, String>();
+
+    /**
+     * Install the per-request alias table used to translate tool_use names
+     * back to their internal (ToolRegistry) form.
+     */
+    public void setToolNameAliases(Map<String, String> toolNameAliases) {
+        this.toolNameAliases = toolNameAliases != null ? toolNameAliases : new HashMap<String, String>();
+    }
+
+    /**
      * Final accumulated text across all text blocks, in arrival order.
      * Populated as {@code content_block_stop} fires for text blocks.
      * Reference is final; the StringBuilder itself is mutated.
@@ -232,17 +248,21 @@ public class AnthropicStreamParser {
                 textBlocks.put(index, new StringBuilder());
             } else if ("tool_use".equals(blockType)) {
                 String id = contentBlock.path("id").asText("");
-                String name = contentBlock.path("name").asText("");
+                String wireName = contentBlock.path("name").asText("");
                 if (id.isEmpty()) {
                     throw new LingsLlmProviderException(
                         LlmErrorCodes.LINGS_L01,
                         "Anthropic SSE content_block_start.tool_use.id missing — Anthropic protocol violation (every tool_use block must carry an id)");
                 }
-                if (name.isEmpty()) {
+                if (wireName.isEmpty()) {
                     throw new LingsLlmProviderException(
                         LlmErrorCodes.LINGS_L01,
                         "Anthropic SSE content_block_start.tool_use.name missing — Anthropic protocol violation (id=" + id + ")");
                 }
+                // Map the wire (sanitized) name back to the registered tool name,
+                // e.g. "server_everything_echo" → "server-everything:echo".
+                String alias = toolNameAliases.get(wireName);
+                String name = alias != null ? alias : wireName;
                 toolBlocks.put(index, new ToolBlockBuffer(id, name));
                 if (sink != null) {
                     sink.onNext(new AgentEvent.ToolStarted(id, name));
